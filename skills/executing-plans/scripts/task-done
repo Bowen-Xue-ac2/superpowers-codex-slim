@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Run or reuse evidence bound to this task, command and acceptance target.
+# task-done PLAN TASK BASE [--reuse] --acceptance TARGET -- COMMAND [ARGS...]
+# Legacy run (-- COMMAND) works but does not create reusable evidence.
+set -euo pipefail
+usage() {
+  echo 'usage: task-done PLAN TASK BASE [--reuse] --acceptance TARGET -- COMMAND [ARGS...]' >&2
+  exit 2
+}
+[ $# -ge 4 ] || usage
+plan=$1; n=$2; base=$3; shift 3
+[[ "$n" =~ ^[1-9][0-9]*$ ]] || usage
+mode=run; acceptance=''
+if [ "${1:-}" = --reuse ]; then mode=reuse; shift; fi
+if [ "${1:-}" = --acceptance ]; then
+  [ $# -ge 2 ] && [ -n "$2" ] || usage
+  acceptance=$2; shift 2
+fi
+[ "${1:-}" = -- ] && [ $# -ge 2 ] || usage
+shift
+[ "$mode" != reuse ] || [ -n "$acceptance" ] || usage
+sdd="$(cd "$(dirname "$0")/../../subagent-driven-development/scripts" && pwd)"
+git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
+base_full=$(git rev-parse "$base"); head=$(git rev-parse HEAD)
+base7=$(git rev-parse --short=7 "$base"); head7=$(git rev-parse --short=7 HEAD)
+dir=$("$sdd/sdd-workspace" "$plan")
+log="$dir/task-$n-tests.log"; ledger="$dir/progress.md"
+# Bind only the actual plan, acceptance input and argv; no project-wide hash.
+plan_digest=$(git hash-object -- "$plan")
+target_digest=$(printf '%s' "$acceptance" | git hash-object --stdin)
+command_digest=$(printf '%s\0' "$@" | git hash-object --stdin)
+refuse_reuse() {
+  echo "task-done: evidence not reusable: $1; run the necessary check, not a completion shortcut" >&2
+  exit 1
+}
+if [ "$mode" = reuse ]; then
+  [ -f "$log" ] && [ -f "$ledger" ] || refuse_reuse 'missing log or completion ledger'
+  mapfile -t saved < <(tail -n 10 "$log")
+  [ "${saved[0]:-}" = '# SP_TASK_EVIDENCE_V2' ] || refuse_reuse 'old or incomplete log'
+  [ "${saved[1]:-}" = "base: $base_full" ] || refuse_reuse 'different BASE'
+  [ "${saved[2]:-}" = "head: $head" ] || refuse_reuse 'different HEAD'
+  [ "${saved[3]:-}" = 'reusable_git_state: yes' ] || refuse_reuse 'run was not an unchanged clean snapshot'
+  [ "${saved[4]:-}" = 'exit: 0' ] || refuse_reuse 'no successful command result'
+  [ "${saved[5]:-}" = "task: $n" ] || refuse_reuse 'different task'
+  [ "${saved[6]:-}" = "plan: $plan_digest" ] || refuse_reuse 'plan changed'
+  [ "${saved[7]:-}" = "acceptance: $target_digest" ] || refuse_reuse 'different acceptance target'
+  [ "${saved[8]:-}" = "command: $command_digest" ] || refuse_reuse 'different command or arguments'
+  [ -z "$(git status --porcelain --untracked-files=normal)" ] || refuse_reuse 'worktree changed'
+  record="${saved[9]#ledger: }"
+  prefix="Task $n: complete (commits $base7..$head7, tests: "
+  [[ "$record" == "$prefix"* ]] || refuse_reuse 'wrong task completion record'
+  grep -qFx -- "$record" "$ledger" || refuse_reuse 'completion record missing'
+  echo "reused: $record"
+  echo "evidence: $log (task/plan/argv/target/Git checked; caller must rule out known defects, unmet required checks and external changes)"
+  exit 0
+fi
+cmd=''
+for a in "$@"; do printf -v quoted '%q' "$a"; cmd="$cmd $quoted"; done
+cmd=${cmd# }
+before_status=$(git status --porcelain --untracked-files=normal)
+rc=0
+"$@" > "$log" 2>&1 || rc=$?
+tail -n 5 "$log"
+last=$(grep -v '^[[:space:]]*$' "$log" | tail -n 1) || last='(no output)'
+reusable=no
+if [ -n "$acceptance" ] && [ -z "$before_status" ] && [ "$head" = "$(git rev-parse HEAD)" ] \
+    && [ "$plan_digest" = "$(git hash-object -- "$plan")" ] \
+    && [ -z "$(git status --porcelain --untracked-files=normal)" ]; then reusable=yes; fi
+line=''
+if [ "$rc" -eq 0 ]; then line="Task $n: complete (commits $base7..$head7, tests: $cmd → $last)"; fi
+printf '\n# SP_TASK_EVIDENCE_V2\nbase: %s\nhead: %s\nreusable_git_state: %s\nexit: %s\ntask: %s\nplan: %s\nacceptance: %s\ncommand: %s\nledger: %s\n' \
+  "$base_full" "$head" "$reusable" "$rc" "$n" "$plan_digest" "$target_digest" "$command_digest" "$line" >> "$log"
+if [ "$rc" -ne 0 ]; then
+  echo "task-done: test command exited $rc; Task $n NOT recorded (full output: $log)" >&2
+  exit "$rc"
+fi
+[ -f "$ledger" ] || printf '# SDD ledger — plan: %s\n' "$plan" > "$ledger"
+printf '%s\n' "$line" >> "$ledger"
+echo "ledger: $line"

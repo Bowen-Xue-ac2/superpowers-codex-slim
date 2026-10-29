@@ -1,0 +1,31 @@
+# Personal configuration and local execution state
+.codex/
+.superpowers/
+.worktrees/
+.private-journal/
+.claude/
+AGENTS.local.md
+config.local.*
+.env
+.env.*
+!.env.example
+backups/
+evaluation/
+receipts/
+sessions/
+*.log
+*.zip
+# Never version key or credential material
+*.pem
+*.key
+*.p12
+*.pfx
+*.asc
+*.gpg
+# Generated dependencies and caches
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.DS_Store
