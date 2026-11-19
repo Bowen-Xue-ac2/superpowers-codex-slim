@@ -32,8 +32,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "?? Superpowers????????????????",
-      "?? systematic-debugging?????????????"
+      "启用 Superpowers：先澄清这项任务的必要设计范围。",
+      "使用 systematic-debugging：诊断当前已观察到的问题。"
     ],
     "websiteURL": "https://github.com/Bowen-Xue-ac2/superpowers-codex-slim",
     "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
